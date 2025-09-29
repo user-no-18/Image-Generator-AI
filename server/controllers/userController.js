@@ -1,157 +1,258 @@
+// controllers/userController.js
 import userModel from "../models/userModel.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import razorpay from 'razorpay';
+import Razorpay from "razorpay";
+import crypto from "crypto";
 import dotenv from "dotenv";
 dotenv.config();
+
+
+const getTokenFromRequest = (req) => {
+  // Try Authorization header first
+  const authHeader = req.headers.authorization || req.headers.Authorization;
+  if (authHeader && typeof authHeader === "string") {
+    const parts = authHeader.split(" ");
+    if (parts.length === 2 && /^Bearer$/i.test(parts[0])) {
+      return parts[1];
+    }
+  }
+  // Fallback to custom header `token`
+  if (req.headers.token) return req.headers.token;
+  // Also allow token in body (rare but helpful for testing)
+  if (req.body && req.body.token) return req.body.token;
+  return null;
+};
+
+const verifyJwt = (token) => {
+  if (!token) throw new Error("No token provided");
+  try {
+    return jwt.verify(token, process.env.JWT_SECRET);
+  } catch (err) {
+    // rethrow so caller handles status
+    throw err;
+  }
+};
+
+/* -----------------------
+   Auth / User endpoints
+   ----------------------- */
 
 const registerUser = async (req, res) => {
   try {
     const { name, email, password } = req.body;
     if (!name || !email || !password) {
-      return res.json({ success: false, message: "Missing Details" });
+      return res.status(400).json({ success: false, message: "Missing details" });
     }
-    //bcrypt part
+
+    // Prevent duplicate registration
+    const existing = await userModel.findOne({ email });
+    if (existing) {
+      return res.status(400).json({ success: false, message: "Email already registered" });
+    }
+
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
-    //creates new userdata
-    const userData = {
-      name,
-      email,
-      password: hashedPassword,
-    };
-    const newUser = new userModel(userData); // ready the package to insert in database
-    const user = await newUser.save(); //inserting in database
-    // jwt token part
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
-    res.json({ success: true, token, user: { name: user.name } });
+
+    const newUser = new userModel({ name, email, password: hashedPassword });
+    const user = await newUser.save();
+
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
+
+    return res.status(201).json({
+      success: true,
+      token,
+      user: { id: user._id, name: user.name, email: user.email },
+    });
   } catch (error) {
-    console.log(error);
-    res.json({ success: false, message: error.message });
+    console.error("Register Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
+
 const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    // Check for missing fields
     if (!email || !password) {
-      return res.json({ success: false, message: "Missing Details" });
+      return res.status(400).json({ success: false, message: "Missing details" });
     }
 
-    // Find user in database
     const user = await userModel.findOne({ email });
-    if (!user) {
-      return res.json({ success: false, message: "User not found" });
-    }
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    // Compare password with hashed password
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.json({ success: false, message: "Invalid credentials" });
-    }
+    if (!isMatch) return res.status(401).json({ success: false, message: "Invalid credentials" });
 
-    // Create JWT token
-    const token = jwt.sign(
-      { id: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
-    // Send success response
-    res.json({
+    return res.json({
       success: true,
       token,
-      user: {
-
-        name: user.name,
-
-      }
+      user: { id: user._id, name: user.name, email: user.email },
     });
-
   } catch (error) {
-    console.log(error);
-    res.json({
-      success: false,
-      message: error.message
-    });
+    console.error("Login Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
+/* -----------------------
+   Credits endpoint
+   ----------------------- */
 const userCredits = async (req, res) => {
   try {
-    const token = req.headers.token;
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const token = getTokenFromRequest(req);
+    if (!token) return res.status(401).json({ success: false, message: "No token provided" });
+
+    let decoded;
+    try {
+      decoded = verifyJwt(token);
+    } catch (err) {
+      console.error("JWT verify failed (credits):", err.message);
+      return res.status(401).json({ success: false, message: "Invalid or expired token" });
+    }
+
     const userId = decoded.id;
-    const user = await userModel.findById(userId)
-    res.json({ success: true, credits: user.creditBalance, user: { name: user.name } })
-  } catch (error) {
-    console.log(error)
-    res.json({ success: false, message: error.message })
-  }
-}
-
-
-
-const razorpayInstance = new razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
-
-const paymentRazorpay = async (req, res) => {
-  try {
-    console.log("Razorpay Key ID:", process.env.RAZORPAY_KEY_ID ? "✅ Loaded" : "❌ Missing");
-   console.log("Razorpay Key Secret:", process.env.RAZORPAY_KEY_SECRET ? "✅ Loaded" : "❌ Missing");
-    const { userId, planId } = req.body;
-
-
-    if (!userId || !planId) {
-      return res.status(400).json({ success: false, message: "Missing userId or planId" });
-    }
-
     const user = await userModel.findById(userId);
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
-    }
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    // Plan details
-    let amount, credits;
-    switch (planId) {
-      case "Basic": amount = 10; credits = 100; break;
-      case "Advanced": amount = 50; credits = 500; break;
-      case "Business": amount = 250; credits = 5000; break;
-      default:
-        return res.status(400).json({ success: false, message: "Plan not found" });
-    }
-
-    // Create Razorpay order
-    const options = {
-      amount: amount * 100, // in paise
-      currency: "INR",
-      receipt: `receipt_${Date.now()}`,
-    };
-
-    const order = await razorpayInstance.orders.create(options);
-
-    // Optional: Save transaction in DB
-    await transactionModel.create({
-      userId,
-      plan: planId,
-      amount,
-      credits,
-      payment: false,  // payment pending
+    return res.json({
+      success: true,
+      credits: user.creditBalance || 0,
+      user: { id: user._id, name: user.name, email: user.email },
     });
-    
-
-    res.json({ success: true, order });
-
-  } catch (err) {
-    console.error("Razorpay Order Error:", err);
-    res.status(500).json({ success: false, message: err.message });
+  } catch (error) {
+    console.error("userCredits Error:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
+// /* -----------------------
+//    Razorpay setup
+//    ----------------------- */
+// const razorpayInstance = new Razorpay({
+//   key_id: process.env.RAZORPAY_KEY_ID,
+//   key_secret: process.env.RAZORPAY_KEY_SECRET,
+// });
 
+// /* Plans map: keep this in sync with frontend (or move to config) */
+// const PLANS = {
+//   Basic: { price: 10, credits: 100 },
+//   Advanced: { price: 50, credits: 500 },
+//   Business: { price: 250, credits: 5000 },
+// };
 
+// /* -----------------------
+//    Create Payment (order)
+//    ----------------------- */
+// const paymentRazorpay = async (req, res) => {
+//   try {
+//     const { planId } = req.body;
+//     if (!planId) return res.status(400).json({ success: false, message: "Missing planId" });
 
-export { registerUser, loginUser, userCredits , paymentRazorpay }
+//     const token = getTokenFromRequest(req);
+//     if (!token) return res.status(401).json({ success: false, message: "No token provided" });
+
+//     let decoded;
+//     try {
+//       decoded = verifyJwt(token);
+//     } catch (err) {
+//       console.error("JWT verify failed (create order):", err.message);
+//       return res.status(401).json({ success: false, message: "Invalid or expired token" });
+//     }
+
+//     const userId = decoded.id;
+//     const user = await userModel.findById(userId);
+//     if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+//     const plan = PLANS[planId];
+//     if (!plan) return res.status(400).json({ success: false, message: "Plan not found" });
+
+//     const date = Date.now();
+//     const transactionData = {
+//       amount: plan.price * 100, // INR paise
+//       currency: "INR",
+//       receipt: `receipt_order_${date}`,
+//       notes: {
+//         userId: userId.toString(),
+//         planId: planId,
+//         credits: plan.credits.toString(),
+//       },
+//     };
+
+//     const order = await razorpayInstance.orders.create(transactionData);
+
+//     // Provide minimal order data and razorpay key id for frontend
+//     return res.json({
+//       success: true,
+//       order,
+//       key: process.env.RAZORPAY_KEY_ID,
+//     });
+//   } catch (error) {
+//     console.error("Razorpay create order error:", error);
+//     // If the error is due to Razorpay or auth, return 500
+//     return res.status(500).json({ success: false, message: error.message });
+//   }
+// };
+
+// /* -----------------------
+//    Verify Payment
+//    ----------------------- */
+// const verifyRazorpay = async (req, res) => {
+//   try {
+//     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+//     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+//       return res.status(400).json({ success: false, message: "Missing payment verification fields" });
+//     }
+
+//     const token = getTokenFromRequest(req);
+//     if (!token) return res.status(401).json({ success: false, message: "No token provided" });
+
+//     let decoded;
+//     try {
+//       decoded = verifyJwt(token);
+//     } catch (err) {
+//       console.error("JWT verify failed (verify payment):", err.message);
+//       return res.status(401).json({ success: false, message: "Invalid or expired token" });
+//     }
+
+//     // Verify signature
+//     const orderData = razorpay_order_id + "|" + razorpay_payment_id;
+//     const expectedSignature = crypto
+//       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+//       .update(orderData.toString())
+//       .digest("hex");
+
+//     const isAuthentic = expectedSignature === razorpay_signature;
+
+//     if (!isAuthentic) {
+//       console.warn("Razorpay signature mismatch", { expectedSignature, razorpay_signature });
+//       return res.status(400).json({ success: false, message: "Payment verification failed (signature mismatch)" });
+//     }
+
+//     // Fetch order details to read notes (planId, credits)
+//     const order = await razorpayInstance.orders.fetch(razorpay_order_id);
+//     const planId = order?.notes?.planId;
+//     const creditsToAdd = parseInt(order?.notes?.credits || "0", 10);
+
+//     const userId = decoded.id;
+//     const user = await userModel.findById(userId);
+//     if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+//     // Update credit balance
+//     const updatedUser = await userModel.findByIdAndUpdate(userId, { $inc: { creditBalance: creditsToAdd } }, { new: true });
+
+//     return res.json({
+//       success: true,
+//       message: "Payment verified successfully",
+//       credits: updatedUser.creditBalance,
+//       creditsAdded: creditsToAdd,
+//       planId,
+//     });
+//   } catch (error) {
+//     console.error("Verify Razorpay Error:", error);
+//     return res.status(500).json({ success: false, message: error.message });
+//   }
+// };
+
+export { registerUser, loginUser, userCredits, paymentRazorpay, verifyRazorpay };

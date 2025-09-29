@@ -1,12 +1,16 @@
-import express from 'express'
-import {registerUser , loginUser, userCredits, paymentRazorpay} from '../controllers/userController.js'
-import userAuth from '../middlewares/auth.js'
-const userRouter = express.Router()
+import express from 'express';
+import { registerUser, loginUser, userCredits, paymentRazorpay, verifyRazorpay } from '../controllers/userController.js';
+// import authMiddleware from '../middleware/authMiddleware.js';
+import userAuth from '../middlewares/auth.js';
+const userRouter = express.Router();
 
-userRouter.post('/register',registerUser)
-userRouter.post('/login',loginUser)
-userRouter.get('/credits',userCredits)
-userRouter.post('/pay-razor',userAuth ,paymentRazorpay)
-export default userRouter
+// Public routes
+userRouter.post('/register', registerUser);
+userRouter.post('/login', loginUser);
 
-// ./ changed in post
+// Protected routes (require authentication)
+userRouter.get('/credits', userAuth, userCredits);
+userRouter.post('/pay-razor', userAuth, paymentRazorpay);
+userRouter.post('/verify-razor', userAuth, verifyRazorpay);
+
+export default userRouter;

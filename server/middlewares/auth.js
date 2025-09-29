@@ -1,22 +1,40 @@
-import jwt from 'jsonwebtoken'
+import jwt from 'jsonwebtoken';
+import userModel from '../models/userModel.js';
 
-
-const userAuth = async (req,res , next )=>{
-    const {token} = req.headers;
-    if(!token){
-        return res.json({success : false , message : 'Not Authorized'})
-
+const userAuth = async (req, res, next) => {
+  try {
+    const token = req.headers.token;
+    
+    if (!token) {
+      return res.json({ success: false, message: 'No token provided. Access denied.' });
     }
-    try {
-        const tokenDecode = jwt.verify(token,process.env.JWT_SECRET);
-        if(tokenDecode.id){
-            req.body.userId =tokenDecode.id;
-        }else{
-             return res.json({success : false , message : 'Not Authorized'})
-        }
-        next(); //pass the control to next middleware 
-    } catch (error) {
-        res.json({success : false , message : 'Not Authorized'})
+
+    // Verify the token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Check if user exists
+    const user = await userModel.findById(decoded.id);
+    if (!user) {
+      return res.json({ success: false, message: 'User not found' });
     }
-}
-export default userAuth
+
+    // Add user info to request object
+    req.userId = decoded.id;
+    req.user = user;
+    
+    next();
+    
+  } catch (error) {
+    console.log('Auth middleware error:', error);
+    
+    if (error.name === 'JsonWebTokenError') {
+      return res.json({ success: false, message: 'Invalid token' });
+    } else if (error.name === 'TokenExpiredError') {
+      return res.json({ success: false, message: 'Token expired' });
+    }
+    
+    return res.json({ success: false, message: 'Token verification failed' });
+  }
+};
+
+export default userAuth;
