@@ -13,12 +13,18 @@ const app = express();
 // Allow JSON parsing
 app.use(express.json());
 
-// ✅ CORS configuration
-app.use(cors({
-  origin: 'https://image-generator-ai-client-6gp4-mmqh2m8ci.vercel.app', // your frontend URL
+// CORS configuration
+const corsOptions = {
+  origin: [
+    'https://image-generator-ai-client-6gp4-mmqh2m8ci.vercel.app', // Your frontend URL
+    'http://localhost:5173' // Local development URL
+  ],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  credentials: true
-}));
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'token']
+};
+
+app.use(cors(corsOptions));
 
 // Connect to DB
 await connectDB();
