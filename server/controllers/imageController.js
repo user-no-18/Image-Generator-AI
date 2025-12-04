@@ -6,10 +6,11 @@ dotenv.config();
 
 export const generateImage = async (req, res) => {
   try {
-    const { userId, prompt } = req.body;
+   const { prompt } = req.body;
+    const userId = req.userId;
     const user = await userModel.findById(userId);
 
-    if (!user || !prompt) {
+    if (!prompt) {
       return res.json({ success: false, message: "Missing Details" });
     }
     if (user.creditBalance <= 0) {
